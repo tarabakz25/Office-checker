@@ -10,6 +10,8 @@ import os
 from groq import Groq
 import db
 import json
+from os.path import join, dirname
+from dotenv import load_dotenv
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime
@@ -21,8 +23,8 @@ from googleapiclient.discovery import build
 
 app = Flask(__name__)
 
-# Groq APIキーの設定
-client = Groq(api_key=os.environ["GROQ_API_KEY"])
+dotenv_path = join(dirname(__file__), '.env')
+load_dotenv(dotenv_path)
 
 # Google Calendar API設定
 SCOPES = ['https://www.googleapis.com/auth/calendar']
