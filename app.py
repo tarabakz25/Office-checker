@@ -16,10 +16,22 @@ from datetime import datetime
 import threading
 import random
 
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+
 app = Flask(__name__)
 
+# Groq APIキーの設定
 client = Groq(api_key=os.environ["GROQ_API_KEY"])
 
+# Google Calendar API設定
+SCOPES = ['https://www.googleapis.com/auth/calendar']
+SERVICE_ACCOUNT_FILE = '/Users/kizzuuuu/Downloads/個人開発フォルダ/Office-checker/credentials.json'
+credentials = service_account.Credentials.from_service_account_file(
+    SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+service = build('calendar', 'v3', credentials=credentials)
+
+# データベースの初期化
 db.init_db()
 
 configuration = Configuration(access_token=os.environ["LINE_CHANNEL_ACCESS_TOKEN"])
