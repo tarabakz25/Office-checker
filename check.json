@@ -17,18 +17,18 @@
             {
               "type": "button",
               "action": {
-                "type": "message",
+                "type": "postback",
                 "label": "Yes",
-                "text": "CHECK_OK"
+                "data": "CHECK_OK"
               },
               "style": "primary"
             },
             {
               "type": "button",
               "action": {
-                "type": "message",
+                "type": "postback",
                 "label": "No",
-                "text": "CHECK_NO"
+                "data": "CHECK_NG"
               },
               "style": "primary",
               "color": "#ff0000"
