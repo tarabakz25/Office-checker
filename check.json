@@ -1,0 +1,42 @@
+{
+    "type": "bubble",
+    "body": {
+      "type": "box",
+      "layout": "vertical",
+      "contents": [
+        {
+          "type": "text",
+          "text": "掃除場所の評価をしてください",
+          "weight": "bold",
+          "size": "18px"
+        },
+        {
+          "type": "box",
+          "layout": "horizontal",
+          "contents": [
+            {
+              "type": "button",
+              "action": {
+                "type": "message",
+                "label": "Yes",
+                "text": "CHECK_OK"
+              },
+              "style": "primary"
+            },
+            {
+              "type": "button",
+              "action": {
+                "type": "message",
+                "label": "No",
+                "text": "CHECK_NO"
+              },
+              "style": "primary",
+              "color": "#ff0000"
+            }
+          ],
+          "margin": "10px",
+          "spacing": "10px"
+        }
+      ]
+    }
+  }
