@@ -10,30 +10,22 @@ import os
 from groq import Groq
 import db
 import json
-from os.path import join, dirname
-from dotenv import load_dotenv
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from datetime import datetime
+from datetime import datetime, timedelta
 import threading
 import random
 
-from google.oauth2 import service_account
+# Google Calendar API 関連のインポートを追加
 from googleapiclient.discovery import build
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+import pickle
 
 app = Flask(__name__)
 
-dotenv_path = join(dirname(__file__), '.env')
-load_dotenv(dotenv_path)
+client = Groq(api_key=os.environ["GROQ_API_KEY"])
 
-# Google Calendar API設定
-SCOPES = ['https://www.googleapis.com/auth/calendar']
-SERVICE_ACCOUNT_FILE = '/Users/kizzuuuu/Downloads/個人開発フォルダ/Office-checker/credentials.json'
-credentials = service_account.Credentials.from_service_account_file(
-    SERVICE_ACCOUNT_FILE, scopes=SCOPES)
-service = build('calendar', 'v3', credentials=credentials)
-
-# データベースの初期化
 db.init_db()
 
 configuration = Configuration(access_token=os.environ["LINE_CHANNEL_ACCESS_TOKEN"])
@@ -59,6 +51,9 @@ CLEAN_PLACE = {
 # YES/NO で NO が選択された際にコメントを受け取るかどうかを判定するための簡易メモリ管理
 pending_comments = {}
 
+SCOPES = ['https://www.googleapis.com/auth/calendar']
+CALENDAR_ID = os.environ.get("CALENDAR_ID", "primary")  # 環境変数や固定IDなど必要に応じて設定
+
 @app.route('/callback', methods=['POST'])
 def callback():
     signature = request.headers['X-Line-Signature']
@@ -69,22 +64,17 @@ def callback():
         abort(400)
     return 'OK'
 
-# フォローイベント
 @handler.add(FollowEvent)
 def handle_follow(event):
     user_id = event.source.user_id
     db.save_user_id(user_id)
     
-    welcome_message = TextMessage(text="友達追加ありがとうございます！\n名前を入力してください。")
+    welcome_message = TextMessage(text="友達追加ありがとうございます！お掃除頑張りましょう！")
     send_message(event, welcome_message)
-    
-    mesage = TextMessage(text="登録完了")
-    send_message(event, mesage)
         
     print(f"新しいユーザーが追加されました: {user_id}")
     db.save_user_name(user_id, event.message.text)
 
-# メッセージイベント（テキストメッセージへの応答）
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     user_id = event.source.user_id
@@ -92,30 +82,25 @@ def handle_message(event):
 
     # ユーザーがコメント入力待ち状態かどうか
     if user_id in pending_comments and pending_comments[user_id] is True:
-        # コメントを取得して掃除担当者へ送信
         comment = text
         del pending_comments[user_id]  # 状態クリア
 
-        # チェック担当(=ユーザーID)から掃除担当者を取得し、プッシュメッセージを送る
         clean_user_id = db.get_clean_user(user_id)
         if clean_user_id:
             notify_text = f"チェック担当から次のコメントが届きました:\n「{comment}」"
             send_push_message(clean_user_id, notify_text)
 
-        # コメントを入力したユーザー（チェック担当者）に完了メッセージを返信
         reply_msg = TextMessage(text="コメントを受け付けました。ご報告ありがとうございます。")
         send_message(event, reply_msg)
         return
 
     db.save_user_id(user_id)
 
-    # 掃除担当が「掃除完了」を送信した場合
     if text == "掃除完了":
         message = TextMessage(text="掃除完了報告を受け付けました。チェック担当者に通知します。")
         send_message(event, message)
-        send_clean_completion_message(user_id)  # チェック担当に通知
+        send_clean_completion_message(user_id)
 
-    # チェック担当が「チェック完了」を送信した場合
     elif text == "チェック完了":
         with open("check.json", "r", encoding='utf-8') as file:
             flex_template = json.load(file)
@@ -131,25 +116,30 @@ def handle_message(event):
             )
             linebot_api.reply_message(reply_message_request)
 
-# Postbackイベント（Yes/No ボタンなどからの応答）
 @handler.add(PostbackEvent)
 def handle_postback(event):
     data = event.postback.data
     user_id = event.source.user_id
     
-    # 掃除チェックがOKの場合
     if data == "CHECK_OK":
-        message = TextMessage(text="チェック完了を受け付けました。お疲れさまでした。")
+        message = TextMessage(text=f"チェック完了を受け付けました。お疲れさまでした。\n次回の掃除日程は、Googleカレンダーを確認してね。")
         send_postback_reply(event, message)
-        send_check_completion_message(user_id)  # 掃除担当者に通知
-        db.update_clean_check(user_id, True)    # DB更新
+        send_check_completion_message(user_id)
+        # 既存処理：フラグ更新
+        db.update_clean_check(user_id, True)
+        
+        # 追加: 次回の掃除予定を Google Calendar に登録する
+        place = db.get_cleaning_place(user_id)
+        if place:
+            create_next_calendar_event(user_id, place)
+        else:
+            print("掃除場所が見つかりませんでした。次回の掃除日程は登録しません。")
 
-    # 掃除チェックがNGの場合（コメントをもらう）
     elif data == "CHECK_NG":
         pending_comments[user_id] = True
         msg = TextMessage(text="仕上がりが十分ではなかったようです。\nコメント（改善点など）を入力してください。")
         send_postback_reply(event, msg)
-        db.update_clean_check(user_id, False)    # DB更新
+        db.update_clean_check(user_id, False)
 
 def send_postback_reply(event, message_obj):
     with ApiClient(configuration) as api_client:
@@ -161,7 +151,6 @@ def send_postback_reply(event, message_obj):
         linebot_api.reply_message(reply_message_request)
 
 def send_clean_completion_message(clean_user_id):
-    # チェック担当者のユーザーIDを取得
     check_user_id = db.get_check_user(clean_user_id)
     if not check_user_id:
         return
@@ -172,7 +161,6 @@ def send_clean_completion_message(clean_user_id):
     send_push_message(check_user_id, message_text)
 
 def send_check_completion_message(user_id):
-    # 掃除担当者のユーザーIDを取得
     clean_user_id = db.get_clean_user(user_id)
     if not clean_user_id:
         return
@@ -191,7 +179,6 @@ def assign_random_cleaning_place():
 
     for i, user_id in enumerate(selected_users):
         assigned_place = clean_places[i]
-        # 担当する掃除場所と被らないチェック場所を選択
         available_check_places = [p for p in check_places if p != assigned_place]
         check_place = random.choice(available_check_places)
         db.update_cleaning_place(user_id, assigned_place)
@@ -199,10 +186,81 @@ def assign_random_cleaning_place():
 
     print("掃除場所とチェック場所の割り当てが完了しました。")
 
+def create_calendar_event(user_id, place):
+    creds = None
+    # 認証トークンが保存されていれば読み込む
+    if os.path.exists('token.pickle'):
+        with open('token.pickle', 'rb') as token:
+            creds = pickle.load(token)
+    # 資格情報がないか期限切れの場合は新規に認証フローを実行
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+            creds = flow.run_local_server(port=0)
+        # トークンを保存
+        with open('token.pickle', 'wb') as token:
+            pickle.dump(creds, token)
+
+    service = build('calendar', 'v3', credentials=creds)
+
+    # イベントの開始・終了時刻例（当日9:00〜10:00）
+    start_time = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
+    end_time = start_time + timedelta(hours=1)
+
+    event = {
+        'summary': f"あなたの掃除当番",
+        'description': f"場所: {place}",
+        'start': {
+            'dateTime': start_time.isoformat(),
+            'timeZone': 'Asia/Tokyo',
+        },
+        'end': {
+            'dateTime': end_time.isoformat(),
+            'timeZone': 'Asia/Tokyo',
+        },
+    }
+
+def create_next_calendar_event(user_id, place):
+    creds = None
+    if os.path.exists('token.pickle'):
+        with open('token.pickle', 'rb') as token:
+            creds = pickle.load(token)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open('token.pickle', 'wb') as token:
+            pickle.dump(creds, token)
+
+    service = build('calendar', 'v3', credentials=creds)
+
+    # 1週間後の同じ時刻に設定（現在時刻から一週間後）
+    start_time = datetime.now() + timedelta(weeks=1)
+    start_time = start_time.replace(hour=9, minute=0, second=0, microsecond=0)
+    end_time = start_time + timedelta(hours=1)
+
+    event = {
+        'summary': f"掃除当番",
+        'description': f"場所: {place}",
+        'start': {
+            'dateTime': start_time.isoformat(),
+            'timeZone': 'Asia/Tokyo',
+        },
+        'end': {
+            'dateTime': end_time.isoformat(),
+            'timeZone': 'Asia/Tokyo',
+        },
+    }
+
+    event_result = service.events().insert(calendarId=CALENDAR_ID, body=event).execute()
+    print(f"次回掃除予定をカレンダーに登録しました: {event_result.get('htmlLink')}")
+
 def assign_and_send_random_cleaning_place():
-    # ランダムに掃除・チェック場所を割り当て
     assign_random_cleaning_place()
-    # 割り当て結果をユーザーに通知
     user_ids = db.get_all_user_ids()
     for user_id in user_ids:
         place = db.get_cleaning_place(user_id)
@@ -216,7 +274,6 @@ def assign_and_send_random_cleaning_place():
             )
             send_push_message(user_id, msg)
 
-# 9時に自動で割り当てを実行
 scheduler.add_job(assign_and_send_random_cleaning_place, 'cron', hour=9, minute=0)
 
 def send_message(event, message_obj):
@@ -243,7 +300,7 @@ def console_input():
         command = input("コマンドを入力してください（'send': 配信メッセージ送信, 'init': DB初期化）: ")
         if command.lower() == 'send':
             assign_and_send_random_cleaning_place()
-            print("掃除場所の通知を送信しました。")
+            print("掃除場所の通知を送信し、Googleカレンダーに登録しました。")
         elif command.lower() == 'init':
             db.init_db()
             print("データベースを初期化しました。")
