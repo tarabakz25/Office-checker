@@ -4,14 +4,16 @@ import sqlite3
 def init_db():
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
+    
+    # 既存のテーブル作成
     c.execute('''CREATE TABLE IF NOT EXISTS users
-                (user_id TEXT PRIMARY KEY,
-                assigned_place TEXT,
-                check_place TEXT,
-                clean_check BOOLEAN DEFAULT FALSE
-                )''')
+                (user_id TEXT PRIMARY KEY, 
+                cleaning_place TEXT,
+                checking_place TEXT)''')
+    
     conn.commit()
     conn.close()
+
 # ユーザーIDを保存
 def save_user_id(user_id):
     conn = sqlite3.connect('users.db')
@@ -83,3 +85,13 @@ def update_clean_check(user_id, clean_check):
     c.execute("UPDATE users SET clean_check = ? WHERE user_id = ?", (clean_check, user_id))
     conn.commit()
     conn.close()
+    
+def get_next_cleaning_date():
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+    try:
+        c.execute("SELECT cleaning_date FROM cleaning_schedule WHERE cleaning_date >= DATE('now') ORDER BY cleaning_date LIMIT 1")
+        result = c.fetchone()
+        return result[0] if result else "予定なし"
+    finally:
+        conn.close()

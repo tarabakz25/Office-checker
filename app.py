@@ -54,6 +54,7 @@ pending_comments = {}
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 CALENDAR_ID = os.environ.get("CALENDAR_ID", "primary")  # 環境変数や固定IDなど必要に応じて設定
 
+
 @app.route('/callback', methods=['POST'])
 def callback():
     signature = request.headers['X-Line-Signature']
@@ -63,6 +64,7 @@ def callback():
     except InvalidSignatureError:
         abort(400)
     return 'OK'
+
 
 @handler.add(FollowEvent)
 def handle_follow(event):
@@ -74,6 +76,7 @@ def handle_follow(event):
         
     print(f"新しいユーザーが追加されました: {user_id}")
     db.save_user_name(user_id, event.message.text)
+
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
@@ -115,31 +118,40 @@ def handle_message(event):
                 messages=[flex_msg]
             )
             linebot_api.reply_message(reply_message_request)
-
+    
+        
 @handler.add(PostbackEvent)
 def handle_postback(event):
     data = event.postback.data
     user_id = event.source.user_id
     
     if data == "CHECK_OK":
-        message = TextMessage(text=f"チェック完了を受け付けました。お疲れさまでした。\n次回の掃除日程は、Googleカレンダーを確認してね。")
+        
+        new_date = datetime.now() + timedelta(weeks=1)
+        next_date = new_date  # 変数にセットしておく
+
+        place = db.get_cleaning_place(user_id)
+
+        # チェック完了メッセージ
+        message = TextMessage(
+            text=(
+                "チェック完了を受け付けました。お疲れさまでした。\n"
+                f"次回の掃除日程は {next_date.month}/{next_date.day} です。"            )
+        )
         send_postback_reply(event, message)
+
+        # チェック完了に伴う通常処理
         send_check_completion_message(user_id)
-        # 既存処理：フラグ更新
         db.update_clean_check(user_id, True)
         
-        # 追加: 次回の掃除予定を Google Calendar に登録する
-        place = db.get_cleaning_place(user_id)
-        if place:
-            create_next_calendar_event(user_id, place)
-        else:
-            print("掃除場所が見つかりませんでした。次回の掃除日程は登録しません。")
+        create_next_calendar_event(user_id, place)
 
     elif data == "CHECK_NG":
         pending_comments[user_id] = True
         msg = TextMessage(text="仕上がりが十分ではなかったようです。\nコメント（改善点など）を入力してください。")
         send_postback_reply(event, msg)
         db.update_clean_check(user_id, False)
+
 
 def send_postback_reply(event, message_obj):
     with ApiClient(configuration) as api_client:
@@ -149,6 +161,7 @@ def send_postback_reply(event, message_obj):
             messages=[message_obj]
         )
         linebot_api.reply_message(reply_message_request)
+
 
 def send_clean_completion_message(clean_user_id):
     check_user_id = db.get_check_user(clean_user_id)
@@ -160,6 +173,7 @@ def send_clean_completion_message(clean_user_id):
     )
     send_push_message(check_user_id, message_text)
 
+
 def send_check_completion_message(user_id):
     clean_user_id = db.get_clean_user(user_id)
     if not clean_user_id:
@@ -169,6 +183,7 @@ def send_check_completion_message(user_id):
         "お疲れさまでした。"
     )
     send_push_message(clean_user_id, message_text)
+
 
 def assign_random_cleaning_place():
     user_ids = db.get_all_user_ids()
@@ -185,6 +200,7 @@ def assign_random_cleaning_place():
         db.update_checking_place(user_id, check_place)
 
     print("掃除場所とチェック場所の割り当てが完了しました。")
+
 
 def create_calendar_event(user_id, place):
     creds = None
@@ -205,10 +221,9 @@ def create_calendar_event(user_id, place):
 
     service = build('calendar', 'v3', credentials=creds)
 
-    # イベントの開始・終了時刻例（当日9:00〜10:00）
-    start_time = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
-    end_time = start_time + timedelta(hours=1)
-
+    # イベントの開始・終了時刻を終日に設定
+    start_time = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    end_time = start_time + timedelta(days=1)
     event = {
         'summary': f"あなたの掃除当番",
         'description': f"場所: {place}",
@@ -259,6 +274,7 @@ def create_next_calendar_event(user_id, place):
     event_result = service.events().insert(calendarId=CALENDAR_ID, body=event).execute()
     print(f"次回掃除予定をカレンダーに登録しました: {event_result.get('htmlLink')}")
 
+
 def assign_and_send_random_cleaning_place():
     assign_random_cleaning_place()
     user_ids = db.get_all_user_ids()
@@ -276,6 +292,7 @@ def assign_and_send_random_cleaning_place():
 
 scheduler.add_job(assign_and_send_random_cleaning_place, 'cron', hour=9, minute=0)
 
+
 def send_message(event, message_obj):
     with ApiClient(configuration) as api_client:
         linebot_api = MessagingApi(api_client)
@@ -284,6 +301,7 @@ def send_message(event, message_obj):
             messages=[message_obj]
         )
         linebot_api.reply_message(reply_message_request)
+
 
 def send_push_message(user_id, text):
     with ApiClient(configuration) as api_client:
@@ -295,6 +313,7 @@ def send_push_message(user_id, text):
         )
         linebot_api.push_message(push_message_request)
 
+
 def console_input():
     while True:
         command = input("コマンドを入力してください（'send': 配信メッセージ送信, 'init': DB初期化）: ")
@@ -305,6 +324,8 @@ def console_input():
             db.init_db()
             print("データベースを初期化しました。")
 
+
+#起動
 if __name__ == "__main__":
     db.init_db()
     scheduler.start()
