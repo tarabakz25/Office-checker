@@ -31,7 +31,7 @@ db.init_db()
 configuration = Configuration(access_token=os.environ["LINE_CHANNEL_ACCESS_TOKEN"])
 handler = WebhookHandler(os.environ["LINE_CHANNEL_SECRET"])
 
-# 9時に掃除場所を割り当てるためのスケジューラを起動
+# 21時、9時に掃除場所を割り当てるためのスケジューラを起動
 scheduler = BackgroundScheduler()
 
 CLEAN_PLACE = {
@@ -290,6 +290,8 @@ def assign_and_send_random_cleaning_place():
             )
             send_push_message(user_id, msg)
 
+# 割り当てを実行（毎日21時と9時）
+scheduler.add_job(assign_and_send_random_cleaning_place, 'cron', hour=21, minute=0)
 scheduler.add_job(assign_and_send_random_cleaning_place, 'cron', hour=9, minute=0)
 
 
